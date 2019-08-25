@@ -10,16 +10,27 @@
 #include <curses.h>
 #include <string.h>
 
-#define SIZE 5000
-int x = 0, y = 0;
+#define handle_error(msg)\
+ do { perror(msg); exit(EXIT_FAILURE); } while(0);
+
+int x = 1, y = 1;
+int STR = 1;
 
 void sig_winch(int signo);
-void text_editor(char *file_name, char *buff);
-int openfile(char *file_name, int ch);
-void menu();
+
+void text_editor(WINDOW *win);
+
+int openfile(WINDOW *win, char *file_name, int ch);
+
+void editing(char *text);
+
+void save_file(WINDOW *win, int fd);
+
+void menu(WINDOW *win);
+
 
 int main(){
-	char *buff = malloc(SIZE*sizeof(char));
+	WINDOW *win;
 	char file_name[255];
 	int working = 1;
 
@@ -28,15 +39,17 @@ int main(){
 	noecho();
 	cbreak();
 	keypad(stdscr, TRUE);
-	//cbreak();
 	curs_set(TRUE);
+	start_color();
 
-	menu();
-	text_editor(file_name, buff);
+	init_pair(1, COLOR_WHITE, COLOR_BLUE);
+	win = newwin(20, 80, 0, 0);
+
+	menu(win);
+	text_editor(win);
 	
-	clear();
+	delwin(win);
 	endwin();
-	free(buff);
 	exit(EXIT_SUCCESS);
 }
 
@@ -47,41 +60,57 @@ void sig_winch(int signo){
 	resizeterm(size.ws_row, size.ws_col);
 }
 
-void menu(){
+void menu(WINDOW *win){
+	wbkgd(win, COLOR_PAIR(1));
+	box(win, '|', '-');
+
 	move(20,0);      
     hline(ACS_CKBOARD,100); 
 
 	mvaddstr(21,0,"F1 to open exists file");
 	mvaddstr(21,50,"F2 to save file");
-	mvaddstr(22,0,"F3 to quit the editor");
+	mvaddstr(22,0,"Esc to quit the editor");
 
-	move(y, x);
+	refresh();
+	wrefresh(win);
 }
 
-int openfile(char *file_name, int ch){
+int openfile(WINDOW *win, char *file_name, int ch){
 	int WFopen = 1, wrong_name = 0;
 	int i = 0, fd = -1;
+	if (ch != KEY_F(1)){
+		while(1){
+			ch = getch();
+			if (ch == KEY_F(1)) break;
+		}
+	}
 
 	while(WFopen){
 		if ((ch  == KEY_F(1)) || (wrong_name)){
-			printw("Input name of file: ");
+			wmove(win, 1, 1);
+			wprintw(win, "Input name of file: ");
 			x = 21;
+			wrefresh(win);
 			while (1){
 				ch = getch();
-				if (ch == 10) break;
+				if (ch == 10){
+					wmove(win, 1, 21);
+					winstr(win, file_name);
+					break;
+				}
 				if (ch == KEY_BACKSPACE){
 					if (x != 21){ 
-						mvaddch(y, x - 1, ' ');
-						file_name[i] = '\0';
-						move(y, x - 1);
+						mvwaddch(win, y, x - 1, ' ');
+						wmove(win, y, x - 1);
 						x--; i--;
+						wrefresh(win);
 					}
 				} else{	
-					file_name[i] = ch;
-					mvaddch(y, x, ch);
+					mvwaddch(win, y, x, ch);
 					x++;
-					move(y, x);
-					i++;	
+					wmove(win, y, x);
+					i++;
+					wrefresh(win);	
 				}
 			}
 			file_name[i] = '\0';
@@ -89,109 +118,159 @@ int openfile(char *file_name, int ch){
 			if (fd == -1){
 				wrong_name = 1;
 				i = 0;
-				clear();
-				menu();
-				x = 0; y = 0;
-				move(y, x);
+				wclear(win);
+				menu(win);
+				x = 1; y = 1;
+				wmove(win, y, x);
 			}
 			else{
-				x = 0, y = 0;
+				x = 1, y = 1;
 				WFopen = 0;
 				wrong_name = 0;
 			}
 		}
-		ch = getch();
 	}
 	return fd;
 }
 
-void text_editor(char *file_name, char *buff){
+void editing(char *text){
+	int i = 0,j = 0;
+
+	while(text[i] != '\0'){
+		if (text[i] == '\n')
+			text[i] = ' ';
+		i++;
+	} 
+	text[i] = '\0';
+}
+
+void save_file(WINDOW *win, int fd){
+	int i;
+	char buff[79];
+
+	lseek(fd, SEEK_SET, 0);
+	for (i = 1; i <= STR; i++){
+		wmove(win, i, 1);
+		winstr(win, buff);
+		buff[78] = '\n'; buff[79] = '\0';
+		write(fd, buff, 79);
+	}
+}
+
+void text_editor(WINDOW *win){
 	int ch, i = 0, fd = -1;
 	int working = 1, WFopen = 1, wrong_name = 0;
-	int maxcols = 80;
+	int maxcols = 79;
+	char file_name[30], buff[80];
 
-	move(x, y);
 
-	fd = openfile(file_name, ch);
+	fd = openfile(win, file_name, ch);
 
-	clear(); menu();
-	i = read(fd, buff, SIZE);
-	if (i != 0){
-		printw(buff);
-		i = i - 2;
-		if (i > maxcols){
-			y = i / (maxcols + 1);
-			x = (i - i%maxcols) % (maxcols + 1) + 1;
-		} else x = (i - i%maxcols) + 1;
-		move(y, x);
+	wclear(win);
+	menu(win);
+
+	i = read(fd, buff, 78);
+	buff[i] = '\0';
+	editing(buff);
+	x = 1; y = 1;
+	while(i){
+		wmove(win, y, x);
+		wprintw(win, buff);
+		if (i == 78){
+			y++;
+			x = 1;
+			STR++;
+		}
+		else x = i;
+		i = read(fd, buff, 78);
+		buff[i] = '\0';
+		editing(buff);
+		wrefresh(win);
 	}
 
-
-	//i = 0;
-	while((working) && (i < SIZE - 1)){
+	wmove(win, y, x);
+	wrefresh(win);
+	while (working){
 		ch = getch();
 
 		switch(ch){
 			case KEY_BACKSPACE:{
-				if (x == 0) 
-					if (y != 0){
-						mvaddch(y - 1, maxcols, ' ');
-						buff[i] = ' ';
-						y--; x = maxcols; i--;
+				if (x == 1) 
+					if (y != 1){
+						STR--;
+						mvwaddch(win, y - 1, maxcols - 1, ' ');
+						y--; x = maxcols;
+						wrefresh(win);
 					} else break;
-				mvaddch(y, x - 1, ' ');
-				buff[i] = ' ';
-				move(y, x - 1);
-				x--; i--;
+				mvwaddch(win, y, x - 1, ' ');
+				wmove(win, y, x - 1);
+				x--; 
+				wrefresh(win);
+				break;
+			}
+			case 10:{
+				x = 1;
+				y++; 
+				if (y > STR) STR++;
+				wmove(win, y, x);
+				wrefresh(win);
 				break;
 			}
 			case KEY_F(1):{
+				STR = 1;
 				close(fd);
-				clear(); menu();
-				x = 0; y = 0;
-				move(y, x);
-				fd = openfile(file_name, ch);
-				clear(); menu();
-				if (i != 0){
-					i = read(fd, buff, SIZE);
-					printw(buff);
-					i = i - 2;
-					if (i > maxcols){
-						y = i / (maxcols + 1);
-						x = (i - i%maxcols) % (maxcols + 1) + 1;
+				wclear(win);
+				menu(win);
+				x = 1; y = 1;
+				wmove(win, y, x);
+				fd = openfile(win, file_name, ch);
+				wclear(win); 
+				menu(win);
+
+				i = read(fd, buff, 78);
+				buff[i] = '\0';
+				editing(buff);
+				x = 1; y = 1;
+				while(i){
+					wmove(win, y, x);
+					wprintw(win, buff);
+					if (i == 78){
+						STR++;
+						y++;
+						x = 1;
 					}
-					else x = (i - i%maxcols) + 1;
-					i = i - i%maxcols;
-					move(y, x);
+					else x = i;
+					i = read(fd, buff, 78);
+					buff[i] = '\0';
+					editing(buff);
+					wrefresh(win);
 				}
+				wmove(win, y, x);
+				wrefresh(win);
 				break;
 			}
 			case KEY_F(2):{
-				lseek(fd, SEEK_SET, 0);
-				write(fd, buff, i);
-				fsync(fd);
+				save_file(win, fd);
 				break;
 			}
-			case KEY_F(3):{
+			case 27:{
 				working = 0;
 				close(fd);
 				break;
 			}
 			default:{
 				if (x == maxcols){
-					buff[i] = '\n';
-					i++;
-					buff[i] = ch;
-					mvaddch(y, x, ch);
-					move(y + 1, 0);
-					x = 0; y++; i++;
+					STR++;
+					mvwaddch(win, y + 1, 1, ch);
+					wmove(win, y + 1, 2);
+					x = 2; y++; 
+					wrefresh(win);
 					break;
 				}
-				buff[i] = ch;
-				mvaddch(y, x, ch);
+				mvwaddch(win, y, x, ch);
 				x++;
-				move(y, x);
-				i++;
+				wmove(win, y, x);
+				wrefresh(win);
 				break;
 			}
 		}
